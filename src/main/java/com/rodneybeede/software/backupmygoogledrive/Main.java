@@ -12,7 +12,6 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 
-import org.apache.log4j.AsyncAppender;
 import org.apache.log4j.ConsoleAppender;
 import org.apache.log4j.FileAppender;
 import org.apache.log4j.Layout;
@@ -92,19 +91,14 @@ class Main {
 		final Layout layout = new PatternLayout("%d{yyyy-MM-dd HH:mm:ss,SSS Z}\t%-5p\tThread=%t\t%c\t%m%n");
 		
 		
-		// Use an async logger for speed
-		final AsyncAppender asyncAppender = new AsyncAppender();
-		asyncAppender.setThreshold(Level.ALL);
-		
 		Logger.getRootLogger().setLevel(Level.ALL);
-		Logger.getRootLogger().addAppender(asyncAppender);
-		
+				
 		
 		// Setup the logger to also log to the console
 		final ConsoleAppender consoleAppender = new ConsoleAppender(layout);
 		consoleAppender.setEncoding("UTF-8");
 		consoleAppender.setThreshold(Level.INFO);
-		asyncAppender.addAppender(consoleAppender);
+		Logger.getRootLogger().addAppender(consoleAppender);
 		
 		
 		// Setup the logger to log into the current working directory
@@ -119,7 +113,7 @@ class Main {
 		}
 		fileAppender.setEncoding("UTF-8");
 		fileAppender.setThreshold(Level.ALL);
-		asyncAppender.addAppender(fileAppender);
+		Logger.getRootLogger().addAppender(fileAppender);
 		
 		System.out.println("Logging to " + logFile.getAbsolutePath());
 	}
@@ -220,6 +214,15 @@ class Main {
 			}
 			
 			final com.google.api.services.drive.model.File firstParent = googleFileMap.get(firstParentID);
+			if(null == firstParent) {
+				log.error(firstParentID + " RETURNED NULL!, possibly because you own a file but it is stored inside a folder shared by someone else?");
+				return parentNames;
+			} else if(null == firstParent.getName()) {
+				log.error(firstParent + " with ID of " + firstParentID + " returned NULL for getName().  Maybe a permissions issue?");
+				return parentNames;
+			}
+			
+			
 			parentNames.addFirst(firstParent.getName());
 			
 			return getParentNamesFromRootToImmediateParent(parentNames, firstParent, googleFileMap, rootFolderFileId);
