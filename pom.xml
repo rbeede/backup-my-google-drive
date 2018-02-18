@@ -4,7 +4,7 @@
 	<groupId>com.rodneybeede.software</groupId>
 	<artifactId>backup-my-google-drive</artifactId>
 	<packaging>jar</packaging>
-	<version>2017.09.12</version>
+	<version>2018.02.18</version>
 
 	<name>Sanity Backup</name>
 	<url>http://www.rodneybeede.com/</url>
@@ -28,10 +28,9 @@
 		<developer>
 			<id>rbeede</id>
 			<name>Rodney Beede</name>
-			<email>nospam_business2008_nospam@rodneybeede.com</email>
 			<url>http://www.rodneybeede.com/</url>
 			<organization>rodneybeede.com</organization>
-			<organizationUrl>http://www.rodneybeede.com/</organizationUrl>
+			<organizationUrl>https://www.rodneybeede.com/</organizationUrl>
 			<roles>
 				<role>architect</role>
 				<role>developer</role>
@@ -55,19 +54,19 @@
 		<dependency>
 			<groupId>com.google.api-client</groupId>
 			<artifactId>google-api-client</artifactId>
-			<version>1.21.0</version>
+			<version>1.23.0</version>
 		</dependency>
 
 		<dependency>
 			<groupId>com.google.oauth-client</groupId>
 			<artifactId>google-oauth-client-jetty</artifactId>
-			<version>1.21.0</version>
+			<version>1.23.0</version>
 		</dependency>
 
 		<dependency>
 			<groupId>com.google.apis</groupId>
 			<artifactId>google-api-services-drive</artifactId>
-			<version>v3-rev4-1.21.0</version>
+			<version>v3-rev103-1.23.0</version>
 		</dependency>
 
 	</dependencies>

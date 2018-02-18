@@ -1,5 +1,6 @@
 package com.rodneybeede.software.backupmygoogledrive;
 
+import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -29,9 +30,12 @@ class Main {
     
 	
 	public static void main(final String[] args) throws IOException, InterruptedException {
-		if(null == args || args.length < 3 || args.length > 4) {
+		if(null == args || args.length < 3 || args.length > 5) {
 			System.err.println("Incorrect number of arguments");
-			System.out.println("Usage:  java -jar " + Main.class.getProtectionDomain().getCodeSource().getLocation().getFile() + " <account username> <account oauth file> <destination directory> [user search filter]");
+			System.out.println("Usage:\tjava -jar " + Main.class.getProtectionDomain().getCodeSource().getLocation().getFile() + " <account username> <account oauth file> <destination directory> [--google-api-filter=search parameters] [--post-parentid-tree-exclude=id]");
+			System.out.println("Usage:\tjava -jar " + Main.class.getProtectionDomain().getCodeSource().getLocation().getFile() + " <account username> <account oauth file> --tree-listing [--google-api-filter=search parameters] [--post-parentid-tree-exclude=id]");
+			System.out.println("\t\t" + "--post-parentid-tree-exclude=id  means if any file has a parent, grandparent, etc. with matching id then exclude it.  Useful for filtering out things like 'My Computer' and all files/folders underneath.  Must be processed after API call query due to API limits.  If possible use --google-api-filter");
+			System.out.println();
 			System.out.println("https://developers.google.com/drive/v3/web/search-parameters#fn2");
 			System.exit(255);
 			return;
@@ -44,13 +48,45 @@ class Main {
 		final String googleUsername = args[0];
 		// Parse configuration options as canonical paths
 		final Path oauthCredentialFile = Paths.get(args[1]).normalize().toAbsolutePath();
-		final Path destinationDirectory = Paths.get(args[2]).normalize().toAbsolutePath();
-		final String userQueryFilter = (args.length > 3) ? args[3] : null;
+		final Path destinationDirectory;
+		if("--tree-listing".equals(args[2])) {
+			destinationDirectory = null;
+		} else {
+			destinationDirectory = Paths.get(args[2]).normalize().toAbsolutePath();			
+		}
+		final String googleApiFilter;
+		final String treeExcludeId;
+		
+		{  // scoping
+			String apiArg = null;
+			String treeArg = null;
+			
+			for(int i = 3; i < args.length; i++) {
+				if(args[i].startsWith("--google-api-filter=")) {
+					apiArg = args[i].substring("--google-api-filter=".length());
+				} else if(args[i].startsWith("--post-parentid-tree-exclude=")) {
+					treeArg = args[i].substring("--post-parentid-tree-exclude=".length());
+				} else {
+					// Illegal argument
+					log.error("Illegal argument:  " + args[i]);
+					System.exit(255);
+					return;
+				}
+			}
+			
+			googleApiFilter = apiArg;  // May still be null
+			treeExcludeId = treeArg;   // May still be null
+		}
 		
 		log.info("Google Account username:  " + googleUsername);
 		log.info("Google Account OAuth credential file:  " + oauthCredentialFile);
-		log.info("Destination directory:  " + destinationDirectory);
-		log.info("User Query Filter:  " + userQueryFilter);  // Might be null which is okay
+		if(null == destinationDirectory) {
+			log.info("Tree Listing option given");
+		} else {
+			log.info("Destination directory:  " + destinationDirectory);			
+		}
+		log.info("Google API Filter:  " + googleApiFilter);  // Might be null which is okay
+		log.info("Tree Exclude ID:  " + treeExcludeId);  // Might be null which is okay
 		
 
 		
@@ -58,6 +94,7 @@ class Main {
 		final GoogleDriveFacade google;
 		try {
 			google = new GoogleDriveFacade(oauthCredentialFile, Main.APPLICATION_NAME);
+			log.info("Authentication to Google was successful");
 		} catch (final GeneralSecurityException e) {
 			log.fatal("Unable to establish authenticated connection to Google", e);
 			LogManager.shutdown();  //Forces log to flush
@@ -67,14 +104,22 @@ class Main {
 
 		
 		// Get a listing of all Google files into a Map where key = fileid and value is the file
-		final Map<String,com.google.api.services.drive.model.File> googleFileMap = google.getDriveFilesList(userQueryFilter);
+		// At this point the map does not have the <root>\grandparent\parent\file mappings yet
+		final Map<String,com.google.api.services.drive.model.File> googleFileMap = google.getDriveFilesList(googleApiFilter);
 		
-		log.info("Number of Google Drive folders and files:  " + googleFileMap.size());
+		log.info("Number of Google Drive folders and files (before tree exclude id):  " + googleFileMap.size());
 		
 		
-		// Download the files & folders
-		log.info("Beginning download of files & folders.  Note:  If file has multiple parents (folders) it is only downloaded into the first parent");
-		downloadGoogleFiles(google, googleFileMap, destinationDirectory);
+		// =========================================
+		if(null == destinationDirectory) {
+			// Tree Listing option was given
+			log.info("Beginning tree listing with given filters (if any)...");
+		} else {
+			// Download the files & folders
+			log.info("Beginning download of files & folders.  Note:  If file has multiple parents (folders) it is only downloaded into the first parent");
+		}
+		
+		downloadGoogleFiles(google, googleFileMap, destinationDirectory, treeExcludeId);  // null for destinationDirectory will signal to skip actual download
 
         
         // Exit with appropriate status
@@ -136,8 +181,9 @@ class Main {
 	 * 
 	 * @param google
 	 * @param googleFileMap
+	 * @param destinationBaseDirectory If null signals to not actually download file only output where it would have gone
 	 */
-	private static void downloadGoogleFiles(final GoogleDriveFacade google, final Map<String,com.google.api.services.drive.model.File> googleFileMap, final Path destinationBaseDirectory) {
+	private static void downloadGoogleFiles(final GoogleDriveFacade google, final Map<String,com.google.api.services.drive.model.File> googleFileMap, final Path destinationBaseDirectory, final String treeExcludeID) {
 		// We are going to need to be able to identify the root file id, so grab it once to avoid excessive calls to Google which triggers their "User Rate Limit Exceeded" error
 		final String rootFolderFileID;
 		try {
@@ -147,50 +193,89 @@ class Main {
 			return;
 		}
 		
+		if(null == destinationBaseDirectory) {
+			// Tree Listing headers
+			System.out.print("id");
+			System.out.print('\t');
+			System.out.print("name");
+			System.out.print('\t');
+			System.out.print("parents");
+			System.out.print('\t');
+			System.out.print("mimetype");
+			System.out.print('\t');
+			System.out.print("modifiedtime");
+			System.out.println();
+		}
+		
 		for(final String id : googleFileMap.keySet()) {
 			final com.google.api.services.drive.model.File driveFile = googleFileMap.get(id);
 			
-			log.trace(id + driveFile.getName());
+			log.trace(id + "\t" + driveFile.getName());
 			
 			// We have to construct the local destination Path
-			final List<String> fileParents = getParentNamesFromRootToImmediateParent(driveFile, googleFileMap, rootFolderFileID);
+			final List<String> fileParents = getParentNamesFromRootToImmediateParent(driveFile, googleFileMap, rootFolderFileID, treeExcludeID);
 			log.trace(fileParents);
-			
-			
-			Path dest = destinationBaseDirectory;
-			for(final String ancestor : fileParents) {
-				dest = FileUtilities.compatibleFilePath(dest, ancestor);
-			}
-			dest = FileUtilities.compatibleFilePath(dest, driveFile.getName());
-			
-	    	if(!dest.getFileName().toString().equals(driveFile.getName())) {
-	    		log.warn("Had to change filename from " + driveFile.getName() + " to " + dest.getFileName() + " for file system compliance");
-	    	}
 
-	    	log.info("Downloading " + driveFile.getName());
-	    	
+			
 	    	log.trace("Google filename  " + driveFile.getName() + "  with Google ID of  " + driveFile.getId());
 	    	log.trace("Google filename  " + driveFile.getName() + "  with Mime Type of  " + driveFile.getMimeType());
 	    	log.trace("Google filename  " + driveFile.getName() + "  with last modified of  " + driveFile.getModifiedTime());
+	    	
+	    	
+	    	if(null == fileParents) {
+	    		// Indicates file/folder is to be skipped per user parameter Tree Exclude ID
+	    		// Either because file/folder matches Tree Exclude ID  or  is grandchild/parent of something with that
+	    		log.info("Skipping " + driveFile.getName() + " because parents are null.  Likely due to filter excluding file/folder or a parent/grandparent/great grandparent/etc...");
+	    		continue;
+	    	}
 
-	    	
-	    	// If download had to do export for format conversion then new extension may have been added
-	    	final Path actualLocalFile;
-			try {
-				actualLocalFile = google.downloadFile(driveFile, dest);
-			} catch (final IOException e) {
-				log.error("Error during download of " + driveFile.getName() + " to " + dest.toString(), e);
-				continue;
-			}
-	    	
-			try {
-		    	log.info("Downloaded " + actualLocalFile + " of " + 
-		    			Files.size(actualLocalFile) + " bytes and lastMod of " +
-		    			Files.getLastModifiedTime(actualLocalFile)
-		    			);
+			
+			
+			if(null == destinationBaseDirectory) {
+				// Only doing a tree listing
+				System.out.print(driveFile.getId());
+				System.out.print('\t');
+				System.out.print(driveFile.getName());
+				System.out.print('\t');
+				System.out.print(String.join(File.separator, fileParents));
+				System.out.print('\t');
+				System.out.print(driveFile.getMimeType());
+				System.out.print('\t');
+				System.out.print(driveFile.getModifiedTime());
+				System.out.println();
+			} else {
+				// Doing a download
+				Path dest = destinationBaseDirectory;
+				for(final String ancestor : fileParents) {
+					dest = FileUtilities.compatibleFilePath(dest, ancestor);
+				}
+				dest = FileUtilities.compatibleFilePath(dest, driveFile.getName());
 				
-			} catch (final IOException e) {
-				log.error("Cannot stat local file " + actualLocalFile.toString(), e);
+		    	if(!dest.getFileName().toString().equals(driveFile.getName())) {
+		    		log.warn("Had to change filename from " + driveFile.getName() + " to " + dest.getFileName() + " for file system compliance");
+		    	}
+
+		    	log.info("Downloading " + driveFile.getName());
+		    	
+		    	// If download had to do export for format conversion then new extension may have been added
+		    	final Path actualLocalFile;
+				try {
+					actualLocalFile = google.downloadFile(driveFile, dest);
+				} catch (final IOException e) {
+					log.error("Error during download of " + driveFile.getName() + " to " + dest.toString(), e);
+					continue;
+				}
+		    	
+				try {
+			    	log.info("Downloaded " + actualLocalFile + " of " + 
+			    			Files.size(actualLocalFile) + " bytes and lastMod of " +
+			    			Files.getLastModifiedTime(actualLocalFile)
+			    			);
+					
+				} catch (final IOException e) {
+					log.error("Cannot stat local file " + actualLocalFile.toString(), e);
+				}
+
 			}
 		}
 	}
@@ -200,13 +285,22 @@ class Main {
 	 * Only looks at first parent each time.
 	 * 
 	 * @param driveFile
-	 * @return List of parents in order of  <root>\ParentLvl1\parentLvl2\Parentlvl3\... but excludes <root> as it would not have a specific user-defined name
+	 * @return List of parents in order of  <root>\ParentLvl1\parentLvl2\Parentlvl3\... but excludes <root> as it would not have a specific user-defined name.  Returns null if one of parents or driveFile itself match treeExcludeID
 	 */
-	private static List<String> getParentNamesFromRootToImmediateParent(final LinkedList<String> parentNames, com.google.api.services.drive.model.File driveFile, final Map<String,com.google.api.services.drive.model.File> googleFileMap, final String rootFolderFileId) {
+	private static List<String> getParentNamesFromRootToImmediateParent(final LinkedList<String> parentNames, com.google.api.services.drive.model.File driveFile, final Map<String,com.google.api.services.drive.model.File> googleFileMap, final String rootFolderFileId, final String treeExcludeID) {
+		if(driveFile.getId().equals(treeExcludeID)) {
+			return null;  // Signals should be excluded
+		}
+		
 		if(null != driveFile.getParents() && !driveFile.getParents().isEmpty()) {
 			final String firstParentID = driveFile.getParents().iterator().next();  // First parent
 
 			log.debug(driveFile.getName() + " has first parent ID of " + firstParentID);
+			
+			if(firstParentID.equals(treeExcludeID)) {
+				log.trace(driveFile.getName() + " has parent with ID matching tree exclude ID of " + treeExcludeID);
+				return null;  // Signals should be excluded
+			}
 			
 			// https://developers.google.com/drive/v3/web/folder  "You can use the alias root to refer to the root folder anywhere a file ID is provided"
 			if(rootFolderFileId.equals(firstParentID)) {
@@ -225,12 +319,12 @@ class Main {
 			
 			parentNames.addFirst(firstParent.getName());
 			
-			return getParentNamesFromRootToImmediateParent(parentNames, firstParent, googleFileMap, rootFolderFileId);
+			return getParentNamesFromRootToImmediateParent(parentNames, firstParent, googleFileMap, rootFolderFileId, treeExcludeID);
 		} else {
 			return parentNames;
 		}
 	}
-	private static List<String> getParentNamesFromRootToImmediateParent(com.google.api.services.drive.model.File driveFile, final Map<String,com.google.api.services.drive.model.File> googleFileMap, final String rootFolderFileId) {
-		return getParentNamesFromRootToImmediateParent(new LinkedList<String>(), driveFile, googleFileMap, rootFolderFileId);
+	private static List<String> getParentNamesFromRootToImmediateParent(com.google.api.services.drive.model.File driveFile, final Map<String,com.google.api.services.drive.model.File> googleFileMap, final String rootFolderFileId, final String treeExcludeID) {
+		return getParentNamesFromRootToImmediateParent(new LinkedList<String>(), driveFile, googleFileMap, rootFolderFileId, treeExcludeID);
 	}
 }

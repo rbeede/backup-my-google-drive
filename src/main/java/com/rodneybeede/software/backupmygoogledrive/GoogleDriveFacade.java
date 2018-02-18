@@ -130,7 +130,7 @@ public class GoogleDriveFacade {
 		// Add the user's query filter if provided to our base query.
 		final String driveQueryString = "trashed=false" +
 			// If specified add the user query otherwise don't
-			(!Strings.isNullOrEmpty(userQueryFilter) ? " and " + userQueryFilter : "");
+			(!Strings.isNullOrEmpty(userQueryFilter) ?  (" and " + userQueryFilter)  : "");
 
 		// Google API returns results in pages so we need to go through all pages and store all results
 		for(String nextPageToken = ""; null != nextPageToken; ) {
@@ -175,7 +175,7 @@ public class GoogleDriveFacade {
 	 * @throws InvalidPathException If destination could not be used as a valid Path (typically file system restriction
 	 * on characters, reserved name, or length)
 	 */
-	public Path downloadFile(final File file, final Path destination) throws IOException {
+	public Path downloadFile(final com.google.api.services.drive.model.File file, final Path destination) throws IOException {
     	switch(file.getMimeType()) {  // https://developers.google.com/drive/v3/web/mime-types   
     		// https://developers.google.com/drive/v3/web/manage-downloads
 			case "application/vnd.google-apps.folder":
@@ -222,7 +222,7 @@ public class GoogleDriveFacade {
 	}
 	
 	
-	private Path downloadFileWithConversion(final File file, final Path destination, final String conversionType) throws IOException {
+	private Path downloadFileWithConversion(final com.google.api.services.drive.model.File file, final Path destination, final String conversionType) throws IOException {
 		if(!Files.exists(destination.getParent())) {
 			// Not atomic but that is okay since an attempt to double create (thread sync possibility) is okay
 			Files.createDirectories(destination.getParent());
@@ -243,7 +243,7 @@ public class GoogleDriveFacade {
 	}
 	
 	
-	private Path downloadFileNoConversion(final File file, final Path destination) throws IOException {
+	private Path downloadFileNoConversion(final com.google.api.services.drive.model.File file, final Path destination) throws IOException {
 		if(!Files.exists(destination.getParent())) {
 			// Not atomic but that is okay since an attempt to double create (thread sync possibility) is okay
 			Files.createDirectories(destination.getParent());
